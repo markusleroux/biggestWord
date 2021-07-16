@@ -1,14 +1,13 @@
 #include <iostream>
 #include <fstream>
+
 #include <unordered_set>
-#include <optional>
-#include <stack>
 #include <set>
 #include <vector>
-#include <ranges>
 
 #include <curl/curl.h>
-#include <algorithm>
+#include <cstring>
+#include <optional>
 
 struct LengthComp {
 	bool operator()(auto v, auto w) const {
@@ -59,11 +58,8 @@ class Dictionary {
 
 			void printWords(int min_size = 6) {
 				std::cout << "\nWORDS: \n";
-				std::ranges::for_each(words,
-															[min_size](const std::string* word_ptr){
-																	if (word_ptr->size() >= min_size)
-																		std::cout << *word_ptr << " | ";
-															});
+				for (auto word_ptr : words)
+					std::cout << *word_ptr << " | ";
 			}
 
 
@@ -154,7 +150,8 @@ class Dictionary {
 			CURL* crl{curl_easy_init()};
 
 			curl_easy_setopt(crl, CURLOPT_URL, url);
-			curl_easy_setopt(crl, CURLOPT_ACCEPT_ENCODING, "deflate");
+			curl_easy_setopt(crl, CURLOPT_ACCEPT_ENCODING, "");
+			curl_easy_setopt(crl, CURLOPT_FOLLOWLOCATION, 1);
 
 			FILE* c_file{fopen(path, "w")};
 			curl_easy_setopt(crl, CURLOPT_WRITEDATA, c_file);
@@ -166,9 +163,11 @@ class Dictionary {
 		}
 
 	public:
-		explicit Dictionary(const char* path, const char* url = nullptr) {
-			if (url)
-				download(path, url);
+		explicit Dictionary(const std::string& path, const std::optional<std::string>& url) {
+			if (url.has_value()) {
+				std::cout << "Downloading...\n";
+				download(path.c_str(), url.value().c_str());
+			}
 
 			std::ifstream file;
 			try {
@@ -181,6 +180,10 @@ class Dictionary {
 						tmp.insert(line);
 				}
 				file.close();
+				if (tmp.empty()) {
+					std::cout << "No words found in file\n";
+					return;
+				}
 				for (auto& word : tmp) {
 					if (not repr_.invariant())
 						throw;
@@ -202,9 +205,61 @@ class Dictionary {
 		}
 };
 
-int main() {
-	Dictionary dict{"/home/markus/data/build/biggest_word/dictionary/test.wordlist",
-									"https://raw.githubusercontent.com/dolph/dictionary/master/popular.txt"};
+struct CmdLineParser {
+		// OPTIONS
+		std::string wordlist_path{};
+		std::optional<std::string> url{};
+		int min_size{6};
+
+		CmdLineParser(int argc, const char *argv[]) {
+			// first argument is always wordlist
+			if (argc == 1)
+				throw InsufficientArgs();
+
+			wordlist_path = argv[1];
+			std::cout << "Parsed wordlist path: " << argv[1] << '\n';
+			for (int i{2}; i + 1 < argc; i += 2) {
+				if (strcmp(argv[i], "-u") == 0 || strcmp(argv[i], "--url") == 0) {
+					url = argv[i + 1];
+					std::cout << "Parsed url: " << argv[i + 1] << '\n';
+				}
+				else if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--min_size") == 0) {
+					min_size = std::stoi(argv[i + 1]);
+					std::cout << "Parsed min_size: " << argv[i + 1] << '\n';
+				}
+				else
+					throw UnknownFlag(argv[i]);
+			}
+		}
+
+		template <class ErrorType>
+		struct CmdLineException : public std::exception {
+			std::string error{ErrorType::message};
+
+			CmdLineException() = default;
+			explicit CmdLineException(const char* err) {
+				error.append(err);
+			}
+
+			[[nodiscard]] const char* what() const noexcept override {
+				return error.c_str();
+			}
+		};
+
+		struct UnknownFlagMsg {
+			static constexpr char message[]{"Unknown command line flag: "};
+		};
+		using UnknownFlag = CmdLineException<UnknownFlagMsg>;
+
+		struct InsufficientArgsMsg {
+			static constexpr char message[]{"Insufficient arguments passed to the command line"};
+		};
+		using InsufficientArgs = CmdLineException<InsufficientArgsMsg>;
+};
+
+int main(int argc, const char * argv[]) {
+	CmdLineParser args{argc, argv};
+	Dictionary dict{args.wordlist_path, args.url};
 	dict.print();
 	return 0;
 }
